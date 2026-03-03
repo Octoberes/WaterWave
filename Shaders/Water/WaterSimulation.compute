@@ -1,0 +1,112 @@
+#pragma kernel CSWavePropagate
+#pragma kernel CSAddImpulse
+
+// Height field of the water surface.
+RWTexture2D<float> _WaveHeightRT;
+// Velocity field paired with the height buffer.
+RWTexture2D<float> _WaveVelocityRT;
+// 0..1 mask defining where water simulation is valid.
+RWTexture2D<float> _WaterMaskRT;
+
+// Simulation step controls.
+float _DeltaTime;
+float _Damping;
+float _Propagation;
+float2 _TextureSize;
+
+// Impulse parameters for interactive disturbances.
+float2 _ImpulseUV;         // 0..1 center
+float _ImpulseRadius;      // 0..1 (relative to min axis)
+float _ImpulseStrength;    // signed force
+
+// Clamp coordinates so neighbor sampling never goes out of bounds.
+int2 ClampCoord(int2 p, int2 size)
+{
+    return clamp(p, int2(0, 0), size - 1);
+}
+
+float SampleHeightClamped(int2 p, int2 size)
+{
+    return _WaveHeightRT[ClampCoord(p, size)];
+}
+
+float SampleMaskClamped(int2 p, int2 size)
+{
+    return _WaterMaskRT[ClampCoord(p, size)];
+}
+
+[numthreads(8, 8, 1)]
+void CSWavePropagate(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = int2(id.xy);
+    int2 size = max(int2(_TextureSize.xy), int2(1, 1));
+
+    if (p.x >= size.x || p.y >= size.y)
+    {
+        return;
+    }
+
+    // Non-water cells are reset to avoid bleeding across boundaries.
+    float mask = saturate(SampleMaskClamped(p, size));
+    if (mask < 0.001)
+    {
+        _WaveHeightRT[p] = 0.0;
+        _WaveVelocityRT[p] = 0.0;
+        return;
+    }
+
+    // 4-neighbor Laplacian for discrete wave equation.
+    float center = SampleHeightClamped(p, size);
+    float left = SampleHeightClamped(p + int2(-1, 0), size);
+    float right = SampleHeightClamped(p + int2(1, 0), size);
+    float down = SampleHeightClamped(p + int2(0, -1), size);
+    float up = SampleHeightClamped(p + int2(0, 1), size);
+    float laplacian = (left + right + up + down - 4.0 * center);
+
+    float velocity = _WaveVelocityRT[p];
+    velocity += laplacian * _Propagation * _DeltaTime;
+
+    // Stronger damping near mask edges reduces ringing artifacts.
+    float edgeDamping = lerp(4.0, 1.0, mask);
+    velocity *= exp(-_Damping * edgeDamping * _DeltaTime);
+
+    float height = center + velocity * _DeltaTime;
+
+    // Clamp to keep simulation stable for showcase usage.
+    _WaveHeightRT[p] = clamp(height, -1.0, 1.0);
+    _WaveVelocityRT[p] = clamp(velocity, -8.0, 8.0);
+}
+
+[numthreads(8, 8, 1)]
+void CSAddImpulse(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = int2(id.xy);
+    int2 size = max(int2(_TextureSize.xy), int2(1, 1));
+
+    if (p.x >= size.x || p.y >= size.y)
+    {
+        return;
+    }
+
+    float mask = saturate(SampleMaskClamped(p, size));
+    if (mask < 0.001)
+    {
+        return;
+    }
+
+    // Convert pixel coord to UV for radial falloff evaluation.
+    float2 uv = (p + 0.5) / size;
+
+    // Aspect correction keeps impulse shape circular.
+    float2 aspect = float2(size.x / max((float)size.y, 1.0), 1.0);
+    float2 d = (uv - _ImpulseUV) * aspect;
+    float dist = length(d);
+
+    float radius = max(_ImpulseRadius, 1e-4);
+    float falloff = saturate(1.0 - dist / radius);
+    falloff = falloff * falloff * (3.0 - 2.0 * falloff);
+
+    // Apply signed impulse into velocity field.
+    float impulse = _ImpulseStrength * falloff * mask;
+    _WaveVelocityRT[p] = clamp(_WaveVelocityRT[p] + impulse, -8.0, 8.0);
+}
