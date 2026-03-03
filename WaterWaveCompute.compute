@@ -1,25 +1,20 @@
 #pragma kernel CSWavePropagate
 #pragma kernel CSAddImpulse
 
-// Height field of the water surface.
 RWTexture2D<float> _WaveHeightRT;
-// Velocity field paired with the height buffer.
 RWTexture2D<float> _WaveVelocityRT;
-// 0..1 mask defining where water simulation is valid.
 RWTexture2D<float> _WaterMaskRT;
 
-// Simulation step controls.
 float _DeltaTime;
 float _Damping;
 float _Propagation;
 float2 _TextureSize;
 
-// Impulse parameters for interactive disturbances.
+// 水面波形控制
 float2 _ImpulseUV;         // 0..1 center
 float _ImpulseRadius;      // 0..1 (relative to min axis)
 float _ImpulseStrength;    // signed force
 
-// Clamp coordinates so neighbor sampling never goes out of bounds.
 int2 ClampCoord(int2 p, int2 size)
 {
     return clamp(p, int2(0, 0), size - 1);
@@ -46,7 +41,7 @@ void CSWavePropagate(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // Non-water cells are reset to avoid bleeding across boundaries.
+    // 重置水域外的区域
     float mask = saturate(SampleMaskClamped(p, size));
     if (mask < 0.001)
     {
@@ -66,13 +61,12 @@ void CSWavePropagate(uint3 id : SV_DispatchThreadID)
     float velocity = _WaveVelocityRT[p];
     velocity += laplacian * _Propagation * _DeltaTime;
 
-    // Stronger damping near mask edges reduces ringing artifacts.
+    // 增强边缘的阻尼
     float edgeDamping = lerp(4.0, 1.0, mask);
     velocity *= exp(-_Damping * edgeDamping * _DeltaTime);
 
     float height = center + velocity * _DeltaTime;
 
-    // Clamp to keep simulation stable for showcase usage.
     _WaveHeightRT[p] = clamp(height, -1.0, 1.0);
     _WaveVelocityRT[p] = clamp(velocity, -8.0, 8.0);
 }
@@ -94,10 +88,10 @@ void CSAddImpulse(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // Convert pixel coord to UV for radial falloff evaluation.
+    // 坐标转换
     float2 uv = (p + 0.5) / size;
 
-    // Aspect correction keeps impulse shape circular.
+    // 矫正纵横比以确保波形
     float2 aspect = float2(size.x / max((float)size.y, 1.0), 1.0);
     float2 d = (uv - _ImpulseUV) * aspect;
     float dist = length(d);
@@ -106,7 +100,7 @@ void CSAddImpulse(uint3 id : SV_DispatchThreadID)
     float falloff = saturate(1.0 - dist / radius);
     falloff = falloff * falloff * (3.0 - 2.0 * falloff);
 
-    // Apply signed impulse into velocity field.
+    // 对速度场应用力
     float impulse = _ImpulseStrength * falloff * mask;
     _WaveVelocityRT[p] = clamp(_WaveVelocityRT[p] + impulse, -8.0, 8.0);
 }

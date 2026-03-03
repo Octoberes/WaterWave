@@ -2,39 +2,39 @@ Shader "Custom/WaterWave"
 {
     Properties
     {
+        _MainTex        ("Sprite Texture",  2D) = "white" {}
         // 深水区域的基础颜色
-        _BaseColor ("Base Color", Color) = (0.07, 0.42, 0.58, 0.85)
-        // 浅水区域的基础颜色 (使用深度图混合).
-        _ShallowColor ("Shallow Color", Color) = (0.18, 0.63, 0.7, 0.85)
-        // Foam tint for crests.
-        _FoamColor ("Foam Color", Color) = (0.87, 0.97, 1, 1)
+        _BaseColor      ("Base Color",      Color) = (0.07, 0.42, 0.58, 0.85)
+        // 浅水区域的基础颜色 (使用深度图混合)
+        _ShallowColor   ("Shallow Color",   Color) = (0.18, 0.63, 0.7, 0.85)
+        // 泡沫颜色
+        _FoamColor      ("Foam Color",      Color) = (0.87, 0.97, 1, 1)
 
-        // Tilemap/world bounds used to remap world position into water UV.
+        // 将世界位置重新映射到水体UV的瓦片地图/世界边界
         _WaterBoundsMin ("Water Bounds Min", Vector) = (0,0,0,0)
         _WaterBoundsMax ("Water Bounds Max", Vector) = (16,6,0,0)
-        // Soft alpha fade near bounds edge.
-        _BoundsFade ("Bounds Fade", Range(0.001, 0.25)) = 0.03
+        // 水体边缘的渐变
+        _BoundsFade     ("Bounds Fade",     Range(0.001, 0.25)) = 0.03
 
-        // Wave appearance controls.
-        _WaveHeight ("Wave Height", Range(0, 1)) = 0.18
-        _WaveFrequency ("Wave Frequency", Range(0.1, 8)) = 2.7
-        _WaveSpeed ("Wave Speed", Range(0, 6)) = 1.2
+        // 波形控制
+        _WaveHeight     ("Wave Height",     Range(0, 1)) = 0.18
+        _WaveFrequency  ("Wave Frequency",  Range(0.1, 8)) = 2.7
+        _WaveSpeed      ("Wave Speed",      Range(0, 6)) = 1.2
         _NormalStrength ("Normal Strength", Range(0, 2)) = 0.55
 
-        // SSR controls.
-        _SSRStrength ("SSR Strength", Range(0, 2)) = 0.8
-        _SSRStepSize ("SSR Step Size", Range(0.002, 0.08)) = 0.02
-        _SSRSteps ("SSR Steps", Range(4, 48)) = 16
+        // 屏幕空间反射
+        _SSRStrength    ("SSR Strength",    Range(0, 2)) = 0.8
+        _SSRStepSize    ("SSR Step Size",   Range(0.002, 0.08)) = 0.02
+        _SSRSteps       ("SSR Steps",       Range(4, 48)) = 16
 
-        // Procedural caustics controls (no LUT required).
-        _CausticsScale ("Caustics Scale", Range(0.2, 24)) = 5.2
-        _CausticsSpeed ("Caustics Speed", Range(0, 8)) = 1.4
-        _CausticsStrength ("Caustics Strength", Range(0, 2)) = 0.72
-        _CausticsCellDensity ("Caustics Cell Density", Range(1, 24)) = 8
-        _CausticsSharpness ("Caustics Sharpness", Range(0.5, 12)) = 3.2
-        _CausticsDistort ("Caustics Distort", Range(0, 2)) = 0.65
-
-        // Simulated wave field texture from compute pass.
+        // 焦散
+        _CausticsScale          ("Caustics Scale",          Range(0.2, 24)) = 5.2
+        _CausticsSpeed          ("Caustics Speed",          Range(0, 8)) = 1.4
+        _CausticsStrength       ("Caustics Strength",       Range(0, 2)) = 0.72
+        _CausticsCellDensity    ("Caustics Cell Density",   Range(1, 24)) = 8
+        _CausticsSharpness      ("Caustics Sharpness",      Range(0.5, 12)) = 3.2
+        _CausticsDistort        ("Caustics Distort",        Range(0, 2)) = 0.65
+        
         _WaveRT ("Wave Simulation RT", 2D) = "black" {}
     }
 
@@ -42,8 +42,8 @@ Shader "Custom/WaterWave"
     {
         Tags
         {
-            "RenderType"="Transparent"
-            "Queue"="Transparent"
+            "RenderType"    ="Transparent"
+            "Queue"         ="Transparent"
             "RenderPipeline"="UniversalPipeline"
         }
 
@@ -61,7 +61,7 @@ Shader "Custom/WaterWave"
             #pragma fragment frag
             #pragma target 4.5
 
-            // Toggle lightweight path for low-end targets.
+            // 适配于低画质
             #pragma multi_compile_local_fragment _ WATER_LOW_QUALITY
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -109,7 +109,6 @@ Shader "Custom/WaterWave"
                 float4 screenPos : TEXCOORD2;
             };
 
-            // Small hash utility for procedural noise.
             float2 Hash22(float2 p)
             {
                 p = frac(p * float2(5.3983, 5.4427));
@@ -117,7 +116,6 @@ Shader "Custom/WaterWave"
                 return frac(float2(p.x * p.y, p.x + p.y));
             }
 
-            // Value noise for macro wave and detail distortion.
             float ValueNoise(float2 uv)
             {
                 float2 i = floor(uv);
@@ -155,7 +153,6 @@ Shader "Custom/WaterWave"
                 return sum;
             }
 
-            // Voronoi cell distance: used for procedural caustics lines.
             float Voronoi(float2 uv)
             {
                 float2 g = floor(uv);
@@ -190,7 +187,7 @@ Shader "Custom/WaterWave"
                 return output;
             }
 
-            // Map world position into [0..1] uv based on tilemap bounds.
+            // 基于地图边界映射UV
             float2 CalcWaterUV(float3 positionWS)
             {
                 float2 minB = _WaterBoundsMin.xy;
@@ -199,14 +196,14 @@ Shader "Custom/WaterWave"
                 return saturate((positionWS.xy - minB) / sizeB);
             }
 
-            // Fade alpha near bounds edges.
+            // 边缘渐变
             float BoundsMask(float2 waterUV)
             {
                 float edge = min(min(waterUV.x, waterUV.y), min(1.0 - waterUV.x, 1.0 - waterUV.y));
                 return saturate(edge / max(_BoundsFade, 1e-4));
             }
 
-            // Approximate normal from wave field gradient.
+            // 由高度生成法线
             float3 ApproxWaterNormal(float2 waterUV, float t, float wave)
             {
                 float2 waveUV = waterUV * _WaveFrequency + float2(0.0, t * _WaveSpeed);
@@ -220,7 +217,6 @@ Shader "Custom/WaterWave"
                 return normalize(float3(-hx, 1.0, -hy));
             }
 
-            // Cheap SSR tracing along a normal-driven screen direction.
             half3 TraceSSR(float2 screenUV, float3 normalWS)
             {
                 float2 dir = normalWS.xz;
@@ -249,7 +245,7 @@ Shader "Custom/WaterWave"
                 return (weight > 0.0) ? accum / weight : 0;
             }
 
-            // Procedural caustics from animated Voronoi + fbm distortion.
+            // voronoi+FBM的程序化焦散
             float CalcProceduralCaustics(float2 waterUV, float3 normalWS, float t)
             {
                 float2 causticsUV = waterUV * _CausticsScale;
@@ -263,7 +259,7 @@ Shader "Custom/WaterWave"
                 float v1 = Voronoi((causticsUV + float2(1.7, -2.4)) * (_CausticsCellDensity * 0.8));
                 float v = min(v0, v1);
 
-                // Invert and sharpen to create bright thin caustics lines.
+                // 反转并锐化
                 float caustics = 1.0 - saturate(v * 1.7);
                 caustics = pow(caustics, _CausticsSharpness);
                 return caustics;
@@ -276,14 +272,14 @@ Shader "Custom/WaterWave"
                 float boundsMask = BoundsMask(waterUV);
                 float t = _Time.y;
 
-                // Mix compute wave RT and procedural noise wave for stability + detail.
+                // 混合计算结果与RT
                 float waveRT = SAMPLE_TEXTURE2D(_WaveRT, sampler_WaveRT, waterUV).r;
                 float proceduralWave = FBM((waterUV + float2(0, t * _WaveSpeed)) * (_WaveFrequency * 2.0));
                 float wave = saturate(0.6 * proceduralWave + 0.4 * waveRT) * _WaveHeight;
 
                 float3 normalWS = ApproxWaterNormal(waterUV + wave * 0.2, t, proceduralWave);
 
-                // Depth delta for shallow/deep color blend.
+                // 深浅水域混合
                 half rawSceneDepth = SampleSceneDepth(screenUV);
                 float sceneEyeDepth = LinearEyeDepth(rawSceneDepth, _ZBufferParams);
 
@@ -298,7 +294,7 @@ Shader "Custom/WaterWave"
 
                 half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
 
-                // Reflection: full trace or low-cost fallback.
+                // 屏幕空间反射以及回退方案
                 #if defined(WATER_LOW_QUALITY)
                     half3 reflected = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, screenUV).rgb;
                 #else
@@ -306,11 +302,11 @@ Shader "Custom/WaterWave"
                 #endif
                 waterCol = lerp(waterCol, reflected, _SSRStrength * saturate(1.0 - depthDelta));
 
-                // Procedural caustics (Voronoi-based).
+                // 基于voronoi的焦散
                 float caustics = CalcProceduralCaustics(waterUV, normalWS, t);
                 waterCol += _CausticsStrength * caustics * (1.0 - depthDelta) * _ShallowColor.rgb;
 
-                // Foam mostly appears on shallow and high-wave areas.
+                // 泡沫区域
                 half foam = smoothstep(0.65, 0.95, saturate(waveRT * 0.5 + proceduralWave * 0.5)) * saturate(1.0 - depthDelta);
                 waterCol = lerp(waterCol, _FoamColor.rgb, foam * 0.65);
 
