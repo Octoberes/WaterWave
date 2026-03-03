@@ -23,10 +23,6 @@ namespace WaterWave
         [SerializeField] private Renderer targetRenderer;
         [SerializeField] private string waveTextureProperty = "_WaveRT";
 
-        [Header("Mask Source")]
-        [SerializeField] private Texture externalWaterMask;
-        [SerializeField] private bool fillWhiteWhenNoMask = true;
-
         [Header("Editor Preview")]
         [SerializeField] private bool previewInEditMode = true;
         [SerializeField, Range(1f, 120f)] private float previewFps = 30f;
@@ -121,7 +117,7 @@ namespace WaterWave
             waveVelocityRT = EnsureRT(waveVelocityRT, simulationResolution, "WaterWave_Velocity");
             waterMaskRT = EnsureRT(waterMaskRT, simulationResolution, "WaterWave_Mask");
 
-            RefreshMask();
+            InitializeMaskIfNeeded();
             BindWaveTexture();
         }
 
@@ -150,25 +146,18 @@ namespace WaterWave
             return created;
         }
 
-        private void RefreshMask()
+        private void InitializeMaskIfNeeded()
         {
             if (waterMaskRT == null)
             {
                 return;
             }
 
-            if (externalWaterMask != null)
-            {
-                // 指定了外部地块遮罩时，使用外部遮罩覆盖内部 RT。
-                Graphics.Blit(externalWaterMask, waterMaskRT);
-                return;
-            }
-
-            if (fillWhiteWhenNoMask)
-            {
-                // 未指定地块遮罩时，默认整张 RT 绘制为白色：全区域为水面。
-                Graphics.Blit(Texture2D.whiteTexture, waterMaskRT);
-            }
+            // 默认将整张遮罩视为水域；外部系统可覆盖该遮罩。
+            var active = RenderTexture.active;
+            RenderTexture.active = waterMaskRT;
+            GL.Clear(false, true, Color.white);
+            RenderTexture.active = active;
         }
 
         private void BindWaveTexture()
@@ -190,9 +179,6 @@ namespace WaterWave
             {
                 return;
             }
-
-            // 每帧同步遮罩，确保编辑器修改外部遮罩后立即生效。
-            RefreshMask();
 
             simulationCompute.SetTexture(propagateKernel, WaveHeightRT, waveHeightRT);
             simulationCompute.SetTexture(propagateKernel, WaveVelocityRT, waveVelocityRT);

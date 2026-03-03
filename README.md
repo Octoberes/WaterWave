@@ -20,7 +20,6 @@
     - `CSAddImpulse`：向波场注入扰动（点击/碰撞）
 - `Scripts/Water/WaterSimulationDriver.cs`
   - `ExecuteAlways` 驱动脚本，支持在 Editor 非运行状态预览水面（可开关）。
-  - 提供 `externalWaterMask`（可选）与 `fillWhiteWhenNoMask`：未指定地块遮罩时可将整张 Mask RT 置白，便于预览全水域效果。
   - 运行模式与编辑器模式分离，避免影响 Play 模式行为。
 
 ## 建议接入方式（在你的 Unity 项目中）
@@ -29,8 +28,7 @@
 2. 将边界传入材质参数：
    - `_WaterBoundsMin`
    - `_WaterBoundsMax`
-3. 将 tilemap 占用区域烘焙为纹理并赋给 `externalWaterMask`，作为 Compute 的水域约束。
-   - 若未提供该遮罩，开启 `fillWhiteWhenNoMask` 可让 `_WaterMaskRT` 全白（全区域水面预览）。
+3. 将 tilemap 占用区域烘焙到 `_WaterMaskRT`，作为 Compute 的水域约束。
 4. 每帧执行 `CSWavePropagate`，把 `_WaveHeightRT` 绑定到 `WaterSurface.shader` 的 `_WaveRT`。
 5. 交互时（点击、落物、角色入水）执行 `CSAddImpulse` 注入扰动。
 6. 如需在编辑器预览（非 Play）：
