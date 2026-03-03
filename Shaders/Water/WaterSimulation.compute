@@ -1,0 +1,112 @@
+#pragma kernel CSWavePropagate
+#pragma kernel CSAddImpulse
+
+// 水面高度场。
+RWTexture2D<float> _WaveHeightRT;
+// 与高度场配套的速度场。
+RWTexture2D<float> _WaveVelocityRT;
+// 0..1 遮罩，定义可进行水体模拟的区域。
+RWTexture2D<float> _WaterMaskRT;
+
+// 模拟步进参数。
+float _DeltaTime;
+float _Damping;
+float _Propagation;
+float2 _TextureSize;
+
+// 交互扰动（冲量）参数。
+float2 _ImpulseUV;         // 0..1 范围的中心点
+float _ImpulseRadius;      // 0..1（相对短边轴）
+float _ImpulseStrength;    // 有符号作用力
+
+// 坐标钳制，避免邻域采样越界。
+int2 ClampCoord(int2 p, int2 size)
+{
+    return clamp(p, int2(0, 0), size - 1);
+}
+
+float SampleHeightClamped(int2 p, int2 size)
+{
+    return _WaveHeightRT[ClampCoord(p, size)];
+}
+
+float SampleMaskClamped(int2 p, int2 size)
+{
+    return _WaterMaskRT[ClampCoord(p, size)];
+}
+
+[numthreads(8, 8, 1)]
+void CSWavePropagate(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = int2(id.xy);
+    int2 size = max(int2(_TextureSize.xy), int2(1, 1));
+
+    if (p.x >= size.x || p.y >= size.y)
+    {
+        return;
+    }
+
+    // 非水域像素重置，避免边界能量渗漏。
+    float mask = saturate(SampleMaskClamped(p, size));
+    if (mask < 0.001)
+    {
+        _WaveHeightRT[p] = 0.0;
+        _WaveVelocityRT[p] = 0.0;
+        return;
+    }
+
+    // 4 邻域拉普拉斯离散波动方程。
+    float center = SampleHeightClamped(p, size);
+    float left = SampleHeightClamped(p + int2(-1, 0), size);
+    float right = SampleHeightClamped(p + int2(1, 0), size);
+    float down = SampleHeightClamped(p + int2(0, -1), size);
+    float up = SampleHeightClamped(p + int2(0, 1), size);
+    float laplacian = (left + right + up + down - 4.0 * center);
+
+    float velocity = _WaveVelocityRT[p];
+    velocity += laplacian * _Propagation * _DeltaTime;
+
+    // 遮罩边缘更强阻尼，减少振铃伪影。
+    float edgeDamping = lerp(4.0, 1.0, mask);
+    velocity *= exp(-_Damping * edgeDamping * _DeltaTime);
+
+    float height = center + velocity * _DeltaTime;
+
+    // 进行钳制以保证展示场景下的稳定性。
+    _WaveHeightRT[p] = clamp(height, -1.0, 1.0);
+    _WaveVelocityRT[p] = clamp(velocity, -8.0, 8.0);
+}
+
+[numthreads(8, 8, 1)]
+void CSAddImpulse(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = int2(id.xy);
+    int2 size = max(int2(_TextureSize.xy), int2(1, 1));
+
+    if (p.x >= size.x || p.y >= size.y)
+    {
+        return;
+    }
+
+    float mask = saturate(SampleMaskClamped(p, size));
+    if (mask < 0.001)
+    {
+        return;
+    }
+
+    // 像素坐标转 UV，用于径向衰减计算。
+    float2 uv = (p + 0.5) / size;
+
+    // 长宽比修正，保持冲量近似圆形。
+    float2 aspect = float2(size.x / max((float)size.y, 1.0), 1.0);
+    float2 d = (uv - _ImpulseUV) * aspect;
+    float dist = length(d);
+
+    float radius = max(_ImpulseRadius, 1e-4);
+    float falloff = saturate(1.0 - dist / radius);
+    falloff = falloff * falloff * (3.0 - 2.0 * falloff);
+
+    // 将有符号冲量写入速度场。
+    float impulse = _ImpulseStrength * falloff * mask;
+    _WaveVelocityRT[p] = clamp(_WaveVelocityRT[p] + impulse, -8.0, 8.0);
+}
