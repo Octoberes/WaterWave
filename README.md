@@ -8,6 +8,8 @@
   - 面向 URP 2D 的水面渲染 Shader。
   - 包含：
     - Tilemap 边界参数映射（`_WaterBoundsMin/_WaterBoundsMax`）
+    - 基于世界单位的边缘深度淡出（`_DepthEdgeFadeWorld`）
+    - 旧参数 `_DepthEdgeFade` 仅用于兼容迁移（已弃用）
     - 边界淡出遮罩（`_BoundsFade`）
     - 低开销程序噪波波浪（FBM）+ 波场 RT 混合
     - 屏幕空间反射（SSR）近似追踪
@@ -28,14 +30,16 @@
 2. 将边界传入材质参数：
    - `_WaterBoundsMin`
    - `_WaterBoundsMax`
-3. 将 tilemap 占用区域烘焙到 `_WaterMaskRT`，作为 Compute 的水域约束。
-4. 每帧执行 `CSWavePropagate`，把 `_WaveHeightRT` 绑定到 `WaterSurface.shader` 的 `_WaveRT`。
-5. 交互时（点击、落物、角色入水）执行 `CSAddImpulse` 注入扰动。
-6. 如需在编辑器预览（非 Play）：
+3. 使用 `_DepthEdgeFadeWorld`（世界单位，例如 `0.8`）控制左右/上边界浅水过渡距离。
+   - `_DepthEdgeFade` 为旧版 UV 语义参数，仅建议在迁移期保留。
+4. 将 tilemap 占用区域烘焙到 `_WaterMaskRT`，作为 Compute 的水域约束。
+5. 每帧执行 `CSWavePropagate`，把 `_WaveHeightRT` 绑定到 `WaterSurface.shader` 的 `_WaveRT`。
+6. 交互时（点击、落物、角色入水）执行 `CSAddImpulse` 注入扰动。
+7. 如需在编辑器预览（非 Play）：
    - 将 `WaterSimulationDriver` 挂到水面对象
    - 绑定 `ComputeShader` 与水面 `Renderer`
    - 勾选 `Preview In Edit Mode`
-7. 按平台调节：
+8. 按平台调节：
    - 降低 `_SSRSteps`
    - 增大 `_SSRStepSize`
    - 降低波场 RT 分辨率

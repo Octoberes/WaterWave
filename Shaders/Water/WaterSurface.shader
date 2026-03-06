@@ -14,6 +14,10 @@ Shader "WaterWave/URP2D/WaterSurface"
         _WaterBoundsMax ("Water Bounds Max", Vector) = (16,6,0,0)
         // 边界附近的透明度软过渡。
         _BoundsFade ("Bounds Fade", Range(0.001, 0.25)) = 0.03
+        // 以世界单位控制左右/上边缘的浅水过渡距离。
+        _DepthEdgeFadeWorld ("Depth Edge Fade World", Float) = 0.8
+        // 旧版 UV 语义参数，仅用于兼容迁移（已弃用）。
+        _DepthEdgeFade ("Depth Edge Fade (Deprecated)", Range(0.001, 0.25)) = 0.03
 
         // 波形外观参数。
         _WaveHeight ("Wave Height", Range(0, 1)) = 0.18
@@ -80,6 +84,8 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float4 _WaterBoundsMin;
                 float4 _WaterBoundsMax;
                 float _BoundsFade;
+                float _DepthEdgeFadeWorld;
+                float _DepthEdgeFade;
                 float _WaveHeight;
                 float _WaveFrequency;
                 float _WaveSpeed;
@@ -206,6 +212,36 @@ Shader "WaterWave/URP2D/WaterSurface"
                 return saturate(edge / max(_BoundsFade, 1e-4));
             }
 
+            // 场景深度与水面深度差，叠加左右/上边界的浅水过渡。
+            float CalcDepth01(float2 waterUV, float3 positionWS)
+            {
+                float4 positionCS = TransformWorldToHClip(positionWS);
+                float2 screenUV = GetNormalizedScreenSpaceUV(positionCS);
+                half rawSceneDepth = SampleSceneDepth(screenUV);
+                float sceneEyeDepth = LinearEyeDepth(rawSceneDepth, _ZBufferParams);
+
+                #if defined(SHADER_API_GLES) || defined(SHADER_API_GLES3)
+                    float rawWaterDepth = saturate(positionCS.z / positionCS.w * 0.5 + 0.5);
+                #else
+                    float rawWaterDepth = saturate(positionCS.z / positionCS.w);
+                #endif
+
+                float waterEyeDepth = LinearEyeDepth(rawWaterDepth, _ZBufferParams);
+                float depth01 = saturate((sceneEyeDepth - waterEyeDepth) * 0.2);
+
+                float distLeft = positionWS.x - _WaterBoundsMin.x;
+                float distRight = _WaterBoundsMax.x - positionWS.x;
+                float distTop = _WaterBoundsMax.y - positionWS.y;
+                float distEdge = min(distLeft, min(distRight, distTop));
+
+                float2 boundsSize = max(_WaterBoundsMax.xy - _WaterBoundsMin.xy, 0.001);
+                float legacyFadeWorld = _DepthEdgeFade * min(boundsSize.x, boundsSize.y);
+                float depthEdgeFadeWorld = (_DepthEdgeFadeWorld > 1e-4) ? _DepthEdgeFadeWorld : legacyFadeWorld;
+                float sideTopFactor = saturate(distEdge / max(depthEdgeFadeWorld, 1e-4));
+
+                return depth01 * sideTopFactor;
+            }
+
             // 根据波场梯度近似法线。
             float3 ApproxWaterNormal(float2 waterUV, float t, float wave)
             {
@@ -283,18 +319,8 @@ Shader "WaterWave/URP2D/WaterSurface"
 
                 float3 normalWS = ApproxWaterNormal(waterUV + wave * 0.2, t, proceduralWave);
 
-                // 用深度差进行浅水/深水颜色混合。
-                half rawSceneDepth = SampleSceneDepth(screenUV);
-                float sceneEyeDepth = LinearEyeDepth(rawSceneDepth, _ZBufferParams);
-
-                #if defined(SHADER_API_GLES) || defined(SHADER_API_GLES3)
-                    float rawWaterDepth = saturate(input.positionCS.z / input.positionCS.w * 0.5 + 0.5);
-                #else
-                    float rawWaterDepth = saturate(input.positionCS.z / input.positionCS.w);
-                #endif
-
-                float waterEyeDepth = LinearEyeDepth(rawWaterDepth, _ZBufferParams);
-                float depthDelta = saturate((sceneEyeDepth - waterEyeDepth) * 0.2);
+                // 用深度差进行浅水/深水颜色混合，并在左右/上边界强制趋浅。
+                float depthDelta = CalcDepth01(waterUV, input.positionWS);
 
                 half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
 
