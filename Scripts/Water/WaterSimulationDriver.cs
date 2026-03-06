@@ -22,6 +22,7 @@ namespace WaterWave
         [Header("Material Binding")]
         [SerializeField] private Renderer targetRenderer;
         [SerializeField] private string waveTextureProperty = "_WaveRT";
+        [SerializeField] private string depthMaskProperty = "_DepthMask";
 
         [Header("Water Bounds")]
         [SerializeField] private bool autoSyncBoundsFromRenderer = true;
@@ -198,6 +199,7 @@ namespace WaterWave
             propertyBlock ??= new MaterialPropertyBlock();
             targetRenderer.GetPropertyBlock(propertyBlock);
             propertyBlock.SetTexture(waveTextureProperty, waveHeightRT);
+            propertyBlock.SetTexture(depthMaskProperty, waterMaskRT);
 
             if (autoSyncBoundsFromRenderer)
             {

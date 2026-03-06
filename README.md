@@ -9,9 +9,11 @@
   - 包含：
     - Tilemap 边界参数映射（`_WaterBoundsMin/_WaterBoundsMax`）
     - 边界淡出遮罩（`_BoundsFade`）
-    - 低开销程序噪波波浪（FBM）+ 波场 RT 混合
+    - **基于地块 Mask 的深度图**（`_DepthMask`）与最深上限（`_MaxDepth`）
+    - **仅左/上/右深浅渐变，下方保持深水**（通过 `_DepthEdgeFade`）
+    - 多组 Gerstner Wave 叠加（可调振幅、方向、波长、速度）
     - 屏幕空间反射（SSR）近似追踪
-    - **基于 Voronoi + 噪波的参数化焦散模拟（不使用 LUT）**
+    - 基于 Voronoi + 噪波的参数化焦散模拟（不使用 LUT）
     - 可选低质量关键字 `WATER_LOW_QUALITY`
 - `Shaders/Water/WaterSimulation.compute`
   - 轻量 2D 波方程传播 Compute Shader。
@@ -21,6 +23,7 @@
 - `Scripts/Water/WaterSimulationDriver.cs`
   - `ExecuteAlways` 驱动脚本，支持在 Editor 非运行状态预览水面（可开关）。
   - 提供 `externalWaterMask`（可选）与 `fillWhiteWhenNoMask`：未指定地块遮罩时可将整张 Mask RT 置白，便于预览全水域效果。
+  - 将模拟波形自动绑定到 `_WaveRT`，并将 Mask RT 自动绑定到 `_DepthMask`。
   - 支持自动同步 `Renderer` 包围盒到 `_WaterBoundsMin/_WaterBoundsMax`，避免 Scene 中因边界不匹配导致不可见。
   - 运行模式与编辑器模式分离，避免影响 Play 模式行为。
 
@@ -31,8 +34,8 @@
    - `_WaterBoundsMin`
    - `_WaterBoundsMax`
    - 可直接开启 `autoSyncBoundsFromRenderer` 自动同步，无需手动填写。
-3. 将 tilemap 占用区域烘焙为纹理并赋给 `externalWaterMask`，作为 Compute 的水域约束。
-   - 若未提供该遮罩，开启 `fillWhiteWhenNoMask` 可让 `_WaterMaskRT` 全白（全区域水面预览）。
+3. 将 tilemap 占用区域烘焙为纹理并赋给 `externalWaterMask`，作为 Compute 与深度图约束。
+   - 若未提供该遮罩，开启 `fillWhiteWhenNoMask` 可让 `_WaterMaskRT` 全白（全区域水面预览 + 默认深水）。
 4. 每帧执行 `CSWavePropagate`，把 `_WaveHeightRT` 绑定到 `WaterSurface.shader` 的 `_WaveRT`。
 5. 交互时（点击、落物、角色入水）执行 `CSAddImpulse` 注入扰动。
 6. 如需在编辑器预览（非 Play）：
