@@ -3,11 +3,11 @@ Shader "WaterWave/URP2D/WaterSurface"
     Properties
     {
         // 深水区域的基础颜色。
-        _BaseColor ("Base Color", Color) = (0.07, 0.42, 0.58, 0.9)
-        // 浅水区域颜色（与深度混合使用）。
-        _ShallowColor ("Shallow Color", Color) = (0.22, 0.68, 0.78, 0.9)
+        _BaseColor ("Base Color", Color) = (0.07, 0.42, 0.58, 0.85)
+        // 浅水区域颜色（与深度差混合使用）。
+        _ShallowColor ("Shallow Color", Color) = (0.18, 0.63, 0.7, 0.85)
         // 波峰泡沫颜色。
-        _FoamColor ("Foam Color", Color) = (0.9, 0.98, 1, 1)
+        _FoamColor ("Foam Color", Color) = (0.87, 0.97, 1, 1)
 
         // Tilemap/世界空间边界：用于将世界坐标映射到水面UV。
         _WaterBoundsMin ("Water Bounds Min", Vector) = (0,0,0,0)
@@ -15,29 +15,11 @@ Shader "WaterWave/URP2D/WaterSurface"
         // 边界附近的透明度软过渡。
         _BoundsFade ("Bounds Fade", Range(0.001, 0.25)) = 0.03
 
-        // 深度参数：来源于地块 Mask，并限制最深上限。
-        _DepthMask ("Depth Mask", 2D) = "white" {}
-        _MaxDepth ("Max Depth", Range(0, 1)) = 1
-        _DepthEdgeFade ("Depth Edge Fade", Range(0.01, 0.5)) = 0.16
-
-        // 波形参数（Gerstner 多波叠加）。
-        _GerstnerAmplitude ("Gerstner Amplitude", Range(0, 1)) = 0.2
-        _WaveRTStrength ("Wave RT Strength", Range(0, 1)) = 0.35
-
-        _WaveA1 ("Wave1 Amplitude", Range(0, 1)) = 0.25
-        _WaveL1 ("Wave1 Length", Range(0.05, 3)) = 0.8
-        _WaveS1 ("Wave1 Speed", Range(0, 5)) = 1.2
-        _WaveD1 ("Wave1 Direction", Vector) = (1, 0.35, 0, 0)
-
-        _WaveA2 ("Wave2 Amplitude", Range(0, 1)) = 0.2
-        _WaveL2 ("Wave2 Length", Range(0.05, 3)) = 0.5
-        _WaveS2 ("Wave2 Speed", Range(0, 5)) = 1.8
-        _WaveD2 ("Wave2 Direction", Vector) = (-0.65, 0.8, 0, 0)
-
-        _WaveA3 ("Wave3 Amplitude", Range(0, 1)) = 0.15
-        _WaveL3 ("Wave3 Length", Range(0.05, 3)) = 1.3
-        _WaveS3 ("Wave3 Speed", Range(0, 5)) = 0.95
-        _WaveD3 ("Wave3 Direction", Vector) = (0.3, 1.0, 0, 0)
+        // 波形外观参数。
+        _WaveHeight ("Wave Height", Range(0, 1)) = 0.18
+        _WaveFrequency ("Wave Frequency", Range(0.1, 8)) = 2.7
+        _WaveSpeed ("Wave Speed", Range(0, 6)) = 1.2
+        _NormalStrength ("Normal Strength", Range(0, 2)) = 0.55
 
         // 屏幕空间反射（SSR）参数。
         _SSRStrength ("SSR Strength", Range(0, 2)) = 0.8
@@ -78,14 +60,15 @@ Shader "WaterWave/URP2D/WaterSurface"
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 4.5
+
+            // 低端平台的轻量渲染分支开关。
             #pragma multi_compile_local_fragment _ WATER_LOW_QUALITY
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
 
             TEXTURE2D(_WaveRT);
             SAMPLER(sampler_WaveRT);
-            TEXTURE2D(_DepthMask);
-            SAMPLER(sampler_DepthMask);
 
             TEXTURE2D_X(_CameraOpaqueTexture);
             SAMPLER(sampler_CameraOpaqueTexture);
@@ -97,27 +80,10 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float4 _WaterBoundsMin;
                 float4 _WaterBoundsMax;
                 float _BoundsFade;
-                float _MaxDepth;
-                float _DepthEdgeFade;
-
-                float _GerstnerAmplitude;
-                float _WaveRTStrength;
-
-                float _WaveA1;
-                float _WaveL1;
-                float _WaveS1;
-                float4 _WaveD1;
-
-                float _WaveA2;
-                float _WaveL2;
-                float _WaveS2;
-                float4 _WaveD2;
-
-                float _WaveA3;
-                float _WaveL3;
-                float _WaveS3;
-                float4 _WaveD3;
-
+                float _WaveHeight;
+                float _WaveFrequency;
+                float _WaveSpeed;
+                float _NormalStrength;
                 float _SSRStrength;
                 float _SSRStepSize;
                 float _SSRSteps;
@@ -138,10 +104,12 @@ Shader "WaterWave/URP2D/WaterSurface"
             struct Varyings
             {
                 float4 positionCS : SV_POSITION;
-                float3 positionWS : TEXCOORD0;
-                float4 screenPos : TEXCOORD1;
+                float2 uv : TEXCOORD0;
+                float3 positionWS : TEXCOORD1;
+                float4 screenPos : TEXCOORD2;
             };
 
+            // 程序噪波使用的小型哈希函数。
             float2 Hash22(float2 p)
             {
                 p = frac(p * float2(5.3983, 5.4427));
@@ -149,6 +117,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 return frac(float2(p.x * p.y, p.x + p.y));
             }
 
+            // Value Noise：用于大尺度波形和细节扰动。
             float ValueNoise(float2 uv)
             {
                 float2 i = floor(uv);
@@ -159,9 +128,11 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float b = dot(Hash22(i + float2(1, 0)), float2(1, 0));
                 float c = dot(Hash22(i + float2(0, 1)), float2(1, 0));
                 float d = dot(Hash22(i + float2(1, 1)), float2(1, 0));
+
                 return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
             }
 
+            // 分形噪波：低质量2层 / 常规4层。
             float FBM(float2 uv)
             {
                 float sum = 0.0;
@@ -184,6 +155,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 return sum;
             }
 
+            // Voronoi 单元距离：用于生成焦散线。
             float Voronoi(float2 uv)
             {
                 float2 g = floor(uv);
@@ -199,9 +171,11 @@ Shader "WaterWave/URP2D/WaterSurface"
                         float2 o = float2(x, y);
                         float2 h = Hash22(g + o);
                         float2 p = o + h - f;
-                        minDist = min(minDist, dot(p, p));
+                        float d = dot(p, p);
+                        minDist = min(minDist, d);
                     }
                 }
+
                 return sqrt(minDist);
             }
 
@@ -211,10 +185,12 @@ Shader "WaterWave/URP2D/WaterSurface"
                 VertexPositionInputs posInputs = GetVertexPositionInputs(input.positionOS.xyz);
                 output.positionCS = posInputs.positionCS;
                 output.positionWS = posInputs.positionWS;
+                output.uv = input.uv;
                 output.screenPos = ComputeScreenPos(output.positionCS);
                 return output;
             }
 
+            // 基于 Tilemap 边界将世界坐标映射到 [0..1] UV。
             float2 CalcWaterUV(float3 positionWS)
             {
                 float2 minB = _WaterBoundsMin.xy;
@@ -223,47 +199,28 @@ Shader "WaterWave/URP2D/WaterSurface"
                 return saturate((positionWS.xy - minB) / sizeB);
             }
 
+            // 边界边缘透明度衰减。
             float BoundsMask(float2 waterUV)
             {
                 float edge = min(min(waterUV.x, waterUV.y), min(1.0 - waterUV.x, 1.0 - waterUV.y));
                 return saturate(edge / max(_BoundsFade, 1e-4));
             }
 
-            // 只在左/上/右产生深浅渐变，下边保持深水。
-            float CalcDirectionalDepth01(float2 waterUV)
+            // 根据波场梯度近似法线。
+            float3 ApproxWaterNormal(float2 waterUV, float t, float wave)
             {
-                float sideTopDist = min(min(waterUV.x, 1.0 - waterUV.x), 1.0 - waterUV.y);
-                float sideTopFactor = saturate(sideTopDist / max(_DepthEdgeFade, 1e-4));
+                float2 waveUV = waterUV * _WaveFrequency + float2(0.0, t * _WaveSpeed);
+                float stepLen = 0.03;
+                float waveX = FBM((waveUV + float2(stepLen, 0)) * 3.1);
+                float waveY = FBM((waveUV + float2(0, stepLen)) * 3.1);
 
-                // 由地块 Mask 提供基础深度（默认白图=全深水）。
-                float maskDepth = SAMPLE_TEXTURE2D(_DepthMask, sampler_DepthMask, waterUV).r;
+                float hx = (waveX - wave) * _NormalStrength;
+                float hy = (waveY - wave) * _NormalStrength;
 
-                return saturate(maskDepth * sideTopFactor * _MaxDepth);
+                return normalize(float3(-hx, 1.0, -hy));
             }
 
-            void GerstnerWave(float2 uv, float2 dir, float amp, float wavelength, float speed, float t, inout float height, inout float2 grad)
-            {
-                float2 d = normalize(dir + 1e-5);
-                float k = TWO_PI / max(wavelength, 1e-4);
-                float phase = k * dot(d, uv) + speed * t;
-
-                height += amp * sin(phase);
-                grad += amp * k * cos(phase) * d;
-            }
-
-            void CalcGerstner(float2 waterUV, float t, out float height, out float3 normalWS)
-            {
-                float h = 0;
-                float2 grad = 0;
-
-                GerstnerWave(waterUV, _WaveD1.xy, _WaveA1 * _GerstnerAmplitude, _WaveL1, _WaveS1, t, h, grad);
-                GerstnerWave(waterUV, _WaveD2.xy, _WaveA2 * _GerstnerAmplitude, _WaveL2, _WaveS2, t, h, grad);
-                GerstnerWave(waterUV, _WaveD3.xy, _WaveA3 * _GerstnerAmplitude, _WaveL3, _WaveS3, t, h, grad);
-
-                height = h;
-                normalWS = normalize(float3(-grad.x, 1.0, -grad.y));
-            }
-
+            // 沿法线投影方向进行低成本 SSR 追踪。
             half3 TraceSSR(float2 screenUV, float3 normalWS)
             {
                 float2 dir = normalWS.xz;
@@ -278,16 +235,21 @@ Shader "WaterWave/URP2D/WaterSurface"
                 for (int i = 0; i < steps; i++)
                 {
                     uv += stepDir;
-                    if (any(uv < 0) || any(uv > 1)) break;
+                    if (any(uv < 0) || any(uv > 1))
+                    {
+                        break;
+                    }
 
                     half3 sampleCol = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, uv).rgb;
                     float w = 1.0 - (i / max((float)steps, 1.0));
                     accum += sampleCol * w;
                     weight += w;
                 }
+
                 return (weight > 0.0) ? accum / weight : 0;
             }
 
+            // 使用动画 Voronoi + FBM 扰动生成程序化焦散。
             float CalcProceduralCaustics(float2 waterUV, float3 normalWS, float t)
             {
                 float2 causticsUV = waterUV * _CausticsScale;
@@ -299,8 +261,12 @@ Shader "WaterWave/URP2D/WaterSurface"
 
                 float v0 = Voronoi(causticsUV * _CausticsCellDensity);
                 float v1 = Voronoi((causticsUV + float2(1.7, -2.4)) * (_CausticsCellDensity * 0.8));
-                float caustics = 1.0 - saturate(min(v0, v1) * 1.7);
-                return pow(caustics, _CausticsSharpness);
+                float v = min(v0, v1);
+
+                // 反相并锐化，得到明亮且细的焦散线。
+                float caustics = 1.0 - saturate(v * 1.7);
+                caustics = pow(caustics, _CausticsSharpness);
+                return caustics;
             }
 
             half4 frag(Varyings input) : SV_Target
@@ -310,30 +276,42 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float boundsMask = BoundsMask(waterUV);
                 float t = _Time.y;
 
-                float gerstnerHeight;
-                float3 gerstnerNormal;
-                CalcGerstner(waterUV, t, gerstnerHeight, gerstnerNormal);
-
+                // 混合 Compute 波场与程序噪波：兼顾稳定性与细节。
                 float waveRT = SAMPLE_TEXTURE2D(_WaveRT, sampler_WaveRT, waterUV).r;
-                float wave = gerstnerHeight + waveRT * _WaveRTStrength;
+                float proceduralWave = FBM((waterUV + float2(0, t * _WaveSpeed)) * (_WaveFrequency * 2.0));
+                float wave = saturate(0.6 * proceduralWave + 0.4 * waveRT) * _WaveHeight;
 
-                float3 normalWS = normalize(lerp(float3(0, 1, 0), gerstnerNormal, saturate(abs(wave) + 0.2)));
+                float3 normalWS = ApproxWaterNormal(waterUV + wave * 0.2, t, proceduralWave);
 
-                float depth01 = CalcDirectionalDepth01(waterUV);
-                half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depth01);
+                // 用深度差进行浅水/深水颜色混合。
+                half rawSceneDepth = SampleSceneDepth(screenUV);
+                float sceneEyeDepth = LinearEyeDepth(rawSceneDepth, _ZBufferParams);
 
+                #if defined(SHADER_API_GLES) || defined(SHADER_API_GLES3)
+                    float rawWaterDepth = saturate(input.positionCS.z / input.positionCS.w * 0.5 + 0.5);
+                #else
+                    float rawWaterDepth = saturate(input.positionCS.z / input.positionCS.w);
+                #endif
+
+                float waterEyeDepth = LinearEyeDepth(rawWaterDepth, _ZBufferParams);
+                float depthDelta = saturate((sceneEyeDepth - waterEyeDepth) * 0.2);
+
+                half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
+
+                // 反射：完整追踪或低成本回退。
                 #if defined(WATER_LOW_QUALITY)
                     half3 reflected = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, screenUV).rgb;
                 #else
                     half3 reflected = TraceSSR(screenUV, normalWS);
                 #endif
-                waterCol = lerp(waterCol, reflected, _SSRStrength * depth01);
+                waterCol = lerp(waterCol, reflected, _SSRStrength * saturate(1.0 - depthDelta));
 
-                float caustics = CalcProceduralCaustics(waterUV + wave * 0.08, normalWS, t);
-                waterCol += _CausticsStrength * caustics * (1.0 - depth01) * _ShallowColor.rgb;
+                // 程序化焦散（基于 Voronoi）。
+                float caustics = CalcProceduralCaustics(waterUV, normalWS, t);
+                waterCol += _CausticsStrength * caustics * (1.0 - depthDelta) * _ShallowColor.rgb;
 
-                float crest = saturate(abs(wave) * (2.0 + _GerstnerAmplitude * 4.0));
-                half foam = smoothstep(0.5, 0.95, crest) * saturate(1.0 - depth01 * 0.85);
+                // 泡沫主要出现在浅水与高波动区域。
+                half foam = smoothstep(0.65, 0.95, saturate(waveRT * 0.5 + proceduralWave * 0.5)) * saturate(1.0 - depthDelta);
                 waterCol = lerp(waterCol, _FoamColor.rgb, foam * 0.65);
 
                 half alpha = _BaseColor.a * boundsMask;

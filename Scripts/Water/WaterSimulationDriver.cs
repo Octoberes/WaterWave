@@ -22,17 +22,6 @@ namespace WaterWave
         [Header("Material Binding")]
         [SerializeField] private Renderer targetRenderer;
         [SerializeField] private string waveTextureProperty = "_WaveRT";
-        [SerializeField] private string depthMaskProperty = "_DepthMask";
-
-        [Header("Water Bounds")]
-        [SerializeField] private bool autoSyncBoundsFromRenderer = true;
-        [SerializeField, Min(0f)] private float boundsPadding = 0.1f;
-        [SerializeField] private string boundsMinProperty = "_WaterBoundsMin";
-        [SerializeField] private string boundsMaxProperty = "_WaterBoundsMax";
-
-        [Header("Mask Source")]
-        [SerializeField] private Texture externalWaterMask;
-        [SerializeField] private bool fillWhiteWhenNoMask = true;
 
         [Header("Editor Preview")]
         [SerializeField] private bool previewInEditMode = true;
@@ -57,7 +46,6 @@ namespace WaterWave
 
         private void OnEnable()
         {
-            AutoAssignRendererIfNeeded();
             EnsureResources();
             lastTickTime = CurrentRealtime();
         }
@@ -72,11 +60,9 @@ namespace WaterWave
             simulationResolution = Mathf.Max(16, simulationResolution);
             previewFps = Mathf.Clamp(previewFps, 1f, 120f);
             previewTimeScale = Mathf.Max(0f, previewTimeScale);
-            boundsPadding = Mathf.Max(0f, boundsPadding);
 
-            AutoAssignRendererIfNeeded();
             EnsureResources();
-            BindWaterProperties();
+            BindWaveTexture();
         }
 
         private void Update()
@@ -115,14 +101,6 @@ namespace WaterWave
             #endif
         }
 
-        private void AutoAssignRendererIfNeeded()
-        {
-            if (targetRenderer == null)
-            {
-                targetRenderer = GetComponent<Renderer>();
-            }
-        }
-
         private bool CanSimulate()
         {
             return simulationCompute != null && propagateKernel >= 0;
@@ -139,8 +117,8 @@ namespace WaterWave
             waveVelocityRT = EnsureRT(waveVelocityRT, simulationResolution, "WaterWave_Velocity");
             waterMaskRT = EnsureRT(waterMaskRT, simulationResolution, "WaterWave_Mask");
 
-            RefreshMask();
-            BindWaterProperties();
+            InitializeMaskIfNeeded();
+            BindWaveTexture();
         }
 
         private static RenderTexture EnsureRT(RenderTexture rt, int resolution, string name)
@@ -168,28 +146,21 @@ namespace WaterWave
             return created;
         }
 
-        private void RefreshMask()
+        private void InitializeMaskIfNeeded()
         {
             if (waterMaskRT == null)
             {
                 return;
             }
 
-            if (externalWaterMask != null)
-            {
-                // 指定了外部地块遮罩时，使用外部遮罩覆盖内部 RT。
-                Graphics.Blit(externalWaterMask, waterMaskRT);
-                return;
-            }
-
-            if (fillWhiteWhenNoMask)
-            {
-                // 未指定地块遮罩时，默认整张 RT 绘制为白色：全区域为水面。
-                Graphics.Blit(Texture2D.whiteTexture, waterMaskRT);
-            }
+            // 默认将整张遮罩视为水域；外部系统可覆盖该遮罩。
+            var active = RenderTexture.active;
+            RenderTexture.active = waterMaskRT;
+            GL.Clear(false, true, Color.white);
+            RenderTexture.active = active;
         }
 
-        private void BindWaterProperties()
+        private void BindWaveTexture()
         {
             if (targetRenderer == null || waveHeightRT == null)
             {
@@ -199,18 +170,6 @@ namespace WaterWave
             propertyBlock ??= new MaterialPropertyBlock();
             targetRenderer.GetPropertyBlock(propertyBlock);
             propertyBlock.SetTexture(waveTextureProperty, waveHeightRT);
-            propertyBlock.SetTexture(depthMaskProperty, waterMaskRT);
-
-            if (autoSyncBoundsFromRenderer)
-            {
-                Bounds bounds = targetRenderer.bounds;
-                Vector3 min = bounds.min - Vector3.one * boundsPadding;
-                Vector3 max = bounds.max + Vector3.one * boundsPadding;
-
-                propertyBlock.SetVector(boundsMinProperty, new Vector4(min.x, min.y, min.z, 0f));
-                propertyBlock.SetVector(boundsMaxProperty, new Vector4(max.x, max.y, max.z, 0f));
-            }
-
             targetRenderer.SetPropertyBlock(propertyBlock);
         }
 
@@ -220,9 +179,6 @@ namespace WaterWave
             {
                 return;
             }
-
-            // 每帧同步遮罩，确保编辑器修改外部遮罩后立即生效。
-            RefreshMask();
 
             simulationCompute.SetTexture(propagateKernel, WaveHeightRT, waveHeightRT);
             simulationCompute.SetTexture(propagateKernel, WaveVelocityRT, waveVelocityRT);
@@ -235,7 +191,7 @@ namespace WaterWave
             int groups = Mathf.CeilToInt(simulationResolution / 8f);
             simulationCompute.Dispatch(propagateKernel, groups, groups, 1);
 
-            BindWaterProperties();
+            BindWaveTexture();
         }
 
         private static float CurrentRealtime()
