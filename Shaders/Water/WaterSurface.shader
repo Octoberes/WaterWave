@@ -16,8 +16,6 @@ Shader "WaterWave/URP2D/WaterSurface"
         _BoundsFade ("Bounds Fade", Range(0.001, 0.25)) = 0.03
         // 以世界单位控制左右/上边缘的浅水过渡距离。
         _DepthEdgeFadeWorld ("Depth Edge Fade World", Float) = 0.8
-        // 旧版 UV 语义参数，仅用于兼容迁移（已弃用）。
-        _DepthEdgeFade ("Depth Edge Fade (Deprecated)", Range(0.001, 0.25)) = 0.03
 
         // 波形外观参数。
         _WaveHeight ("Wave Height", Range(0, 1)) = 0.18
@@ -67,6 +65,8 @@ Shader "WaterWave/URP2D/WaterSurface"
 
             // 低端平台的轻量渲染分支开关。
             #pragma multi_compile_local_fragment _ WATER_LOW_QUALITY
+            // 2D 反射默认使用 Sorting Layer Texture，可按平台/材质切换到 Opaque 回退。
+            #pragma multi_compile_local_fragment _ WATER_REFLECT_OPAQUE_FALLBACK
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
@@ -77,6 +77,9 @@ Shader "WaterWave/URP2D/WaterSurface"
             TEXTURE2D_X(_CameraOpaqueTexture);
             SAMPLER(sampler_CameraOpaqueTexture);
 
+            TEXTURE2D_X(_CameraSortingLayerTexture);
+            SAMPLER(sampler_CameraSortingLayerTexture);
+
             CBUFFER_START(UnityPerMaterial)
                 half4 _BaseColor;
                 half4 _ShallowColor;
@@ -85,7 +88,6 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float4 _WaterBoundsMax;
                 float _BoundsFade;
                 float _DepthEdgeFadeWorld;
-                float _DepthEdgeFade;
                 float _WaveHeight;
                 float _WaveFrequency;
                 float _WaveSpeed;
@@ -234,10 +236,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float distTop = _WaterBoundsMax.y - positionWS.y;
                 float distEdge = min(distLeft, min(distRight, distTop));
 
-                float2 boundsSize = max(_WaterBoundsMax.xy - _WaterBoundsMin.xy, 0.001);
-                float legacyFadeWorld = _DepthEdgeFade * min(boundsSize.x, boundsSize.y);
-                float depthEdgeFadeWorld = (_DepthEdgeFadeWorld > 1e-4) ? _DepthEdgeFadeWorld : legacyFadeWorld;
-                float sideTopFactor = saturate(distEdge / max(depthEdgeFadeWorld, 1e-4));
+                float sideTopFactor = saturate(distEdge / max(_DepthEdgeFadeWorld, 1e-4));
 
                 return depth01 * sideTopFactor;
             }
@@ -253,16 +252,26 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float hx = (waveX - wave) * _NormalStrength;
                 float hy = (waveY - wave) * _NormalStrength;
 
-                return normalize(float3(-hx, 1.0, -hy));
+                // URP 2D 下屏幕平面主要对应 XY，法线朝向相机（+Z）。
+                return normalize(float3(-hx, -hy, 1.0));
             }
 
             // 沿法线投影方向进行低成本 SSR 追踪。
+            half3 SampleReflectionColor(float2 uv)
+            {
+                #if defined(WATER_REFLECT_OPAQUE_FALLBACK)
+                    return SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, uv).rgb;
+                #else
+                    return SAMPLE_TEXTURE2D_X(_CameraSortingLayerTexture, sampler_CameraSortingLayerTexture, uv).rgb;
+                #endif
+            }
+
             half3 TraceSSR(float2 screenUV, float3 normalWS)
             {
-                float2 dir = normalWS.xz;
+                float2 dir = normalWS.xy;
                 float dirLen2 = max(dot(dir, dir), 1e-6);
                 float2 stepDir = dir * rsqrt(dirLen2) * _SSRStepSize;
-                float2 uv = screenUV;
+                float2 uv = screenUV + stepDir;
                 half3 accum = 0;
                 float weight = 0;
 
@@ -276,7 +285,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                         break;
                     }
 
-                    half3 sampleCol = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, uv).rgb;
+                    half3 sampleCol = SampleReflectionColor(uv);
                     float w = 1.0 - (i / max((float)steps, 1.0));
                     accum += sampleCol * w;
                     weight += w;
@@ -289,7 +298,7 @@ Shader "WaterWave/URP2D/WaterSurface"
             float CalcProceduralCaustics(float2 waterUV, float3 normalWS, float t)
             {
                 float2 causticsUV = waterUV * _CausticsScale;
-                causticsUV += normalWS.xz * _CausticsDistort;
+                causticsUV += normalWS.xy * _CausticsDistort;
                 causticsUV += float2(0.17, -0.23) * t * _CausticsSpeed;
 
                 float distortion = FBM(causticsUV * 1.9 + t * 0.25) - 0.5;
@@ -326,15 +335,19 @@ Shader "WaterWave/URP2D/WaterSurface"
 
                 // 反射：完整追踪或低成本回退。
                 #if defined(WATER_LOW_QUALITY)
-                    half3 reflected = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, screenUV).rgb;
+                    float2 reflectUV = screenUV + normalWS.xy * (_SSRStepSize * 3.0);
+                    half3 reflected = SampleReflectionColor(saturate(reflectUV));
                 #else
                     half3 reflected = TraceSSR(screenUV, normalWS);
                 #endif
-                waterCol = lerp(waterCol, reflected, _SSRStrength * saturate(1.0 - depthDelta));
+
+                float reflectionMask = lerp(0.35, 1.0, saturate(1.0 - depthDelta));
+                waterCol = lerp(waterCol, reflected, _SSRStrength * reflectionMask);
 
                 // 程序化焦散（基于 Voronoi）。
                 float caustics = CalcProceduralCaustics(waterUV, normalWS, t);
-                waterCol += _CausticsStrength * caustics * (1.0 - depthDelta) * _ShallowColor.rgb;
+                float causticsMask = lerp(0.25, 1.0, saturate(1.0 - depthDelta));
+                waterCol += _CausticsStrength * caustics * causticsMask * _ShallowColor.rgb;
 
                 // 泡沫主要出现在浅水与高波动区域。
                 half foam = smoothstep(0.65, 0.95, saturate(waveRT * 0.5 + proceduralWave * 0.5)) * saturate(1.0 - depthDelta);
