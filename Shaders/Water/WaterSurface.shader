@@ -23,10 +23,11 @@ Shader "WaterWave/URP2D/WaterSurface"
         _WaveSpeed ("Wave Speed", Range(0, 6)) = 1.2
         _NormalStrength ("Normal Strength", Range(0, 2)) = 0.55
 
-        // 屏幕空间反射（SSR）参数。
-        _SSRStrength ("SSR Strength", Range(0, 2)) = 0.8
-        _SSRStepSize ("SSR Step Size", Range(0.002, 0.08)) = 0.02
-        _SSRSteps ("SSR Steps", Range(4, 48)) = 16
+        // 手动平面反射参数：按屏幕高度镜像上半部分场景并进行UV扰动。
+        _ReflectionStrength ("Reflection Strength", Range(0, 2)) = 0.8
+        _ReflectionHeight ("Reflection Height (Screen Y)", Range(0, 1)) = 0.5
+        _ReflectionDistort ("Reflection Distort", Range(0, 0.2)) = 0.03
+        _ReflectionEdgeFade ("Reflection Edge Fade", Range(0.001, 0.2)) = 0.04
 
         // 程序化焦散参数（不依赖 LUT）。
         _CausticsScale ("Caustics Scale", Range(0.2, 24)) = 5.2
@@ -92,9 +93,10 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float _WaveFrequency;
                 float _WaveSpeed;
                 float _NormalStrength;
-                float _SSRStrength;
-                float _SSRStepSize;
-                float _SSRSteps;
+                float _ReflectionStrength;
+                float _ReflectionHeight;
+                float _ReflectionDistort;
+                float _ReflectionEdgeFade;
                 float _CausticsScale;
                 float _CausticsSpeed;
                 float _CausticsStrength;
@@ -291,7 +293,10 @@ Shader "WaterWave/URP2D/WaterSurface"
                     weight += w;
                 }
 
-                return (weight > 0.0) ? accum / weight : 0;
+                half3 reflected = SampleReflectionColor(saturate(reflectedUV));
+                float depthMask = lerp(0.35, 1.0, saturate(1.0 - depthDelta));
+                float weight = _ReflectionStrength * inMirrorRange * sourceAbovePlane * edgeFade * depthMask;
+                return half4(reflected, saturate(weight));
             }
 
             // 使用动画 Voronoi + FBM 扰动生成程序化焦散。

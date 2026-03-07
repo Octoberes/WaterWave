@@ -45,6 +45,7 @@
    - 增大 `_SSRStepSize`
    - 降低波场 RT 分辨率
    - 启用 `WATER_LOW_QUALITY`
+   - 调整 `_ReflectionDistort` 与 `_ReflectionEdgeFade` 平衡表现/稳定性
 
 ## 说明
 
