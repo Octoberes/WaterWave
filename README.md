@@ -11,13 +11,11 @@
     - 基于世界单位的边缘深度淡出（`_DepthEdgeFadeWorld`）
     - 边界淡出遮罩（`_BoundsFade`）
     - 低开销程序噪波波浪（FBM）+ 波场 RT 混合
-    - 手动平面反射：按屏幕高度镜像上方场景并支持 UV 扰动（仅镜像该高度以上场景内容）
+    - 屏幕空间反射（SSR）近似追踪（深水区域保留最小反射权重，避免完全失效）
     - 2D 反射默认依赖 `CameraSortingLayerTexture`（`_CameraOpaqueTexture` 仅兼容回退）
     - **基于 Voronoi + 噪波的参数化焦散模拟（不使用 LUT，深水区域保留弱焦散）**
-    - 焦散亮线基于 Voronoi 距离高值区域，避免亮暗反相
     - 可选低质量关键字 `WATER_LOW_QUALITY`
     - 可选回退关键字 `WATER_REFLECT_OPAQUE_FALLBACK`（仅在 Sorting Layer Texture 不可用时使用）
-    - 反射控制参数：`_ReflectionHeight/_ReflectionDistort/_ReflectionEdgeFade`
 - `Shaders/Water/WaterSimulation.compute`
   - 轻量 2D 波方程传播 Compute Shader。
   - 包含：
@@ -43,6 +41,8 @@
    - 绑定 `ComputeShader` 与水面 `Renderer`
    - 勾选 `Preview In Edit Mode`
 9. 按平台调节：
+   - 降低 `_SSRSteps`
+   - 增大 `_SSRStepSize`
    - 降低波场 RT 分辨率
    - 启用 `WATER_LOW_QUALITY`
    - 调整 `_ReflectionDistort` 与 `_ReflectionEdgeFade` 平衡表现/稳定性

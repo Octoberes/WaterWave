@@ -258,7 +258,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 return normalize(float3(-hx, -hy, 1.0));
             }
 
-            // 反射源采样：默认 Sorting Layer，必要时回退 Opaque。
+            // 沿法线投影方向进行低成本 SSR 追踪。
             half3 SampleReflectionColor(float2 uv)
             {
                 #if defined(WATER_REFLECT_OPAQUE_FALLBACK)
@@ -268,22 +268,34 @@ Shader "WaterWave/URP2D/WaterSurface"
                 #endif
             }
 
-            half4 CalcPlanarReflection(float2 screenUV, float3 normalWS, float depthDelta)
+            half3 TraceSSR(float2 screenUV, float3 normalWS)
             {
-                float mirrorY = _ReflectionHeight * 2.0 - screenUV.y;
-                float2 reflectedUV = float2(screenUV.x, mirrorY);
-                reflectedUV += normalWS.xy * _ReflectionDistort;
+                float2 dir = normalWS.xy;
+                float dirLen2 = max(dot(dir, dir), 1e-6);
+                float2 stepDir = dir * rsqrt(dirLen2) * _SSRStepSize;
+                float2 uv = screenUV + stepDir;
+                half3 accum = 0;
+                float weight = 0;
 
-                float inMirrorRange = step(0.0, mirrorY) * step(mirrorY, 1.0);
-                float mirrorFromAbove = step(_ReflectionHeight, mirrorY);
+                int steps = (int)round(_SSRSteps);
+                [loop]
+                for (int i = 0; i < steps; i++)
+                {
+                    uv += stepDir;
+                    if (any(uv < 0) || any(uv > 1))
+                    {
+                        break;
+                    }
 
-                float2 edgeDist2 = min(reflectedUV, 1.0 - reflectedUV);
-                float edgeDist = min(edgeDist2.x, edgeDist2.y);
-                float edgeFade = saturate(edgeDist / max(_ReflectionEdgeFade, 1e-4));
+                    half3 sampleCol = SampleReflectionColor(uv);
+                    float w = 1.0 - (i / max((float)steps, 1.0));
+                    accum += sampleCol * w;
+                    weight += w;
+                }
 
                 half3 reflected = SampleReflectionColor(saturate(reflectedUV));
                 float depthMask = lerp(0.35, 1.0, saturate(1.0 - depthDelta));
-                float weight = _ReflectionStrength * inMirrorRange * mirrorFromAbove * edgeFade * depthMask;
+                float weight = _ReflectionStrength * inMirrorRange * sourceAbovePlane * edgeFade * depthMask;
                 return half4(reflected, saturate(weight));
             }
 
@@ -326,9 +338,16 @@ Shader "WaterWave/URP2D/WaterSurface"
 
                 half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
 
-                // 手动平面反射：按指定屏幕高度镜像上方场景，再进行法线扰动。
-                half4 reflectionData = CalcPlanarReflection(screenUV, normalWS, depthDelta);
-                waterCol = lerp(waterCol, reflectionData.rgb, reflectionData.a);
+                // 反射：完整追踪或低成本回退。
+                #if defined(WATER_LOW_QUALITY)
+                    float2 reflectUV = screenUV + normalWS.xy * (_SSRStepSize * 3.0);
+                    half3 reflected = SampleReflectionColor(saturate(reflectUV));
+                #else
+                    half3 reflected = TraceSSR(screenUV, normalWS);
+                #endif
+
+                float reflectionMask = lerp(0.35, 1.0, saturate(1.0 - depthDelta));
+                waterCol = lerp(waterCol, reflected, _SSRStrength * reflectionMask);
 
                 // 程序化焦散（基于 Voronoi）。
                 float caustics = CalcProceduralCaustics(waterUV, normalWS, t);
