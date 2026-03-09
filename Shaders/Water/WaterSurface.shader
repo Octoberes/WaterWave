@@ -313,8 +313,8 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float v1 = Voronoi((causticsUV + float2(1.7, -2.4)) * (_CausticsCellDensity * 0.8));
                 float v = min(v0, v1);
 
-                // 反相并锐化，得到明亮且细的焦散线。
-                float caustics = 1.0 - saturate(v * 1.7);
+                // 使用距离高值区域形成亮线，避免亮暗反相。
+                float caustics = saturate(v * 1.7);
                 caustics = pow(caustics, _CausticsSharpness);
                 return caustics;
             }
