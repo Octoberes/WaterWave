@@ -287,9 +287,8 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float t = _Time.y;
 
                 // 混合 Compute 波场与程序噪波：兼顾稳定性与细节。
-                float waveRT = SAMPLE_TEXTURE2D(_WaveRT, sampler_WaveRT, waterUV).r;
                 float proceduralWave = FBM((waterUV + float2(0, t * _WaveSpeed)) * (_WaveFrequency * 2.0));
-                float wave = saturate(0.6 * proceduralWave + 0.4 * waveRT) * _WaveHeight;
+                float wave = saturate(proceduralWave) * _WaveHeight;
 
                 float3 normalWS = ApproxWaterNormal(waterUV + wave * 0.2, t, proceduralWave);
 
@@ -310,7 +309,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 waterCol += _CausticsStrength * caustics * causticsMask * _ShallowColor.rgb;
 
                 // 泡沫主要出现在浅水与高波动区域。
-                half foam = smoothstep(0.65, 0.95, saturate(waveRT * 0.5 + proceduralWave * 0.5)) * saturate(1.0 - depthDelta);
+                half foam = smoothstep(0.65, 0.95, saturate(proceduralWave)) * saturate(1.0 - depthDelta);
                 waterCol = lerp(waterCol, _FoamColor.rgb, foam * 0.65);
 
                 half alpha = _BaseColor.a * boundsMask;
