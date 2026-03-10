@@ -22,10 +22,9 @@ Shader "Custom/WaterWave"
         _WaveSpeed      ("Wave Speed",      Range(0, 6)) = 1.2
         _NormalStrength ("Normal Strength", Range(0, 2)) = 0.55
 
-        // 屏幕空间反射
-        _SSRStrength    ("SSR Strength",    Range(0, 2)) = 0.8
-        _SSRStepSize    ("SSR Step Size",   Range(0.002, 0.08)) = 0.02
-        _SSRSteps       ("SSR Steps",       Range(4, 48)) = 16
+        // 反射（由外部相机输出到 RT）
+        _ReflectionStrength ("Reflection Strength", Range(0, 2)) = 0.8
+        _ReflectionDistort  ("Reflection Distort", Range(0, 0.2)) = 0.03
 
         // 焦散
         _CausticsScale          ("Caustics Scale",          Range(0.2, 24)) = 5.2
@@ -36,6 +35,7 @@ Shader "Custom/WaterWave"
         _CausticsDistort        ("Caustics Distort",        Range(0, 2)) = 0.65
         
         _WaveRT ("Wave Simulation RT", 2D) = "black" {}
+        _ReflectionRT ("Reflection RT", 2D) = "black" {}
     }
 
     SubShader
@@ -70,8 +70,8 @@ Shader "Custom/WaterWave"
             TEXTURE2D(_WaveRT);
             SAMPLER(sampler_WaveRT);
 
-            TEXTURE2D_X(_CameraOpaqueTexture);
-            SAMPLER(sampler_CameraOpaqueTexture);
+            TEXTURE2D(_ReflectionRT);
+            SAMPLER(sampler_ReflectionRT);
 
             CBUFFER_START(UnityPerMaterial)
                 half4 _BaseColor;
@@ -84,9 +84,8 @@ Shader "Custom/WaterWave"
                 float _WaveFrequency;
                 float _WaveSpeed;
                 float _NormalStrength;
-                float _SSRStrength;
-                float _SSRStepSize;
-                float _SSRSteps;
+                float _ReflectionStrength;
+                float _ReflectionDistort;
                 float _CausticsScale;
                 float _CausticsSpeed;
                 float _CausticsStrength;
@@ -217,32 +216,12 @@ Shader "Custom/WaterWave"
                 return normalize(float3(-hx, 1.0, -hy));
             }
 
-            half3 TraceSSR(float2 screenUV, float3 normalWS)
+            half3 SampleReflectionFromRT(float2 screenUV, float3 normalWS, float wave)
             {
-                float2 dir = normalWS.xz;
-                float dirLen2 = max(dot(dir, dir), 1e-6);
-                float2 stepDir = dir * rsqrt(dirLen2) * _SSRStepSize;
-                float2 uv = screenUV;
-                half3 accum = 0;
-                float weight = 0;
-
-                int steps = (int)round(_SSRSteps);
-                [loop]
-                for (int i = 0; i < steps; i++)
-                {
-                    uv += stepDir;
-                    if (any(uv < 0) || any(uv > 1))
-                    {
-                        break;
-                    }
-
-                    half3 sampleCol = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, uv).rgb;
-                    float w = 1.0 - (i / max((float)steps, 1.0));
-                    accum += sampleCol * w;
-                    weight += w;
-                }
-
-                return (weight > 0.0) ? accum / weight : 0;
+                float2 distort = normalWS.xz * _ReflectionDistort;
+                distort += (wave - 0.5) * (_ReflectionDistort * 0.65);
+                float2 uv = saturate(screenUV + distort);
+                return SAMPLE_TEXTURE2D(_ReflectionRT, sampler_ReflectionRT, uv).rgb;
             }
 
             // voronoi+FBM的程序化焦散
@@ -294,13 +273,9 @@ Shader "Custom/WaterWave"
 
                 half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
 
-                // 屏幕空间反射以及回退方案
-                #if defined(WATER_LOW_QUALITY)
-                    half3 reflected = SAMPLE_TEXTURE2D_X(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, screenUV).rgb;
-                #else
-                    half3 reflected = TraceSSR(screenUV, normalWS);
-                #endif
-                waterCol = lerp(waterCol, reflected, _SSRStrength * saturate(1.0 - depthDelta));
+                // 反射 RT 采样并按波浪扭曲
+                half3 reflected = SampleReflectionFromRT(screenUV, normalWS, waveRT);
+                waterCol = lerp(waterCol, reflected, _ReflectionStrength * saturate(1.0 - depthDelta));
 
                 // 基于voronoi的焦散
                 float caustics = CalcProceduralCaustics(waterUV, normalWS, t);
