@@ -7,7 +7,7 @@ using UnityEditor;
 namespace WaterWave
 {
     /// <summary>
-    /// 驱动水体 Compute 模拟，并将结果绑定到目标材质。
+    /// 驱动水体 Compute 模拟（可选，用于独立波场预览/试验）。
     /// 通过 ExecuteAlways 支持编辑器预览，同时不改变 Play 模式行为。
     /// </summary>
     [ExecuteAlways]
@@ -18,10 +18,6 @@ namespace WaterWave
         [SerializeField, Min(16)] private int simulationResolution = 256;
         [SerializeField, Min(0.001f)] private float damping = 1.2f;
         [SerializeField, Min(0.001f)] private float propagation = 18f;
-
-        [Header("Material Binding")]
-        [SerializeField] private Renderer targetRenderer;
-        [SerializeField] private string waveTextureProperty = "_WaveRT";
 
         [Header("Editor Preview")]
         [SerializeField] private bool previewInEditMode = true;
@@ -42,7 +38,6 @@ namespace WaterWave
 
         private int propagateKernel = -1;
         private float lastTickTime;
-        private MaterialPropertyBlock propertyBlock;
 
         private void OnEnable()
         {
@@ -62,7 +57,6 @@ namespace WaterWave
             previewTimeScale = Mathf.Max(0f, previewTimeScale);
 
             EnsureResources();
-            BindWaveTexture();
         }
 
         private void Update()
@@ -118,7 +112,6 @@ namespace WaterWave
             waterMaskRT = EnsureRT(waterMaskRT, simulationResolution, "WaterWave_Mask");
 
             InitializeMaskIfNeeded();
-            BindWaveTexture();
         }
 
         private static RenderTexture EnsureRT(RenderTexture rt, int resolution, string name)
@@ -160,19 +153,6 @@ namespace WaterWave
             RenderTexture.active = active;
         }
 
-        private void BindWaveTexture()
-        {
-            if (targetRenderer == null || waveHeightRT == null)
-            {
-                return;
-            }
-
-            propertyBlock ??= new MaterialPropertyBlock();
-            targetRenderer.GetPropertyBlock(propertyBlock);
-            propertyBlock.SetTexture(waveTextureProperty, waveHeightRT);
-            targetRenderer.SetPropertyBlock(propertyBlock);
-        }
-
         private void SimulateFrame(float dt)
         {
             if (dt <= 0f)
@@ -190,8 +170,6 @@ namespace WaterWave
 
             int groups = Mathf.CeilToInt(simulationResolution / 8f);
             simulationCompute.Dispatch(propagateKernel, groups, groups, 1);
-
-            BindWaveTexture();
         }
 
         private static float CurrentRealtime()
