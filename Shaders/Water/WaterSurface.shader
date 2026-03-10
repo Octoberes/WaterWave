@@ -35,6 +35,8 @@ Shader "WaterWave/URP2D/WaterSurface"
         _CausticsSharpness ("Caustics Sharpness", Range(0.5, 12)) = 3.2
         _CausticsDistort ("Caustics Distort", Range(0, 2)) = 0.65
 
+        // 来自 Compute Pass 的波场纹理。
+        _WaveRT ("Wave Simulation RT", 2D) = "black" {}
         // 外部相机输出的反射 RT。
         _ReflectionRT ("Reflection RT", 2D) = "black" {}
     }
@@ -66,6 +68,9 @@ Shader "WaterWave/URP2D/WaterSurface"
             #pragma multi_compile_local_fragment _ WATER_LOW_QUALITY
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
+
+            TEXTURE2D(_WaveRT);
+            SAMPLER(sampler_WaveRT);
 
             TEXTURE2D(_ReflectionRT);
             SAMPLER(sampler_ReflectionRT);
@@ -250,8 +255,7 @@ Shader "WaterWave/URP2D/WaterSurface"
             {
                 float2 distort = normalWS.xy * _ReflectionDistort;
                 distort += (wave - 0.5) * (_ReflectionDistort * 0.65);
-                float2 uv = float2(screenUV.x, 1.0 - screenUV.y);
-                uv = saturate(uv + distort);
+                float2 uv = saturate(screenUV + distort);
                 return SAMPLE_TEXTURE2D(_ReflectionRT, sampler_ReflectionRT, uv).rgb;
             }
 
@@ -294,7 +298,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
 
                 // 反射：直接采样外部 RT，并根据波浪高度扭曲。
-                half3 reflected = SampleReflectionFromRT(screenUV, normalWS, wave);
+                half3 reflected = SampleReflectionFromRT(screenUV, normalWS, waveRT);
 
                 float reflectionMask = lerp(0.35, 1.0, saturate(1.0 - depthDelta));
                 waterCol = lerp(waterCol, reflected, _ReflectionStrength * reflectionMask);
