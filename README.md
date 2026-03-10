@@ -11,11 +11,9 @@
     - 基于世界单位的边缘深度淡出（`_DepthEdgeFadeWorld`）
     - 边界淡出遮罩（`_BoundsFade`）
     - 低开销程序噪波波浪（FBM）+ 波场 RT 混合
-    - 屏幕空间反射（SSR）近似追踪（深水区域保留最小反射权重，避免完全失效）
-    - 2D 反射默认依赖 `CameraSortingLayerTexture`（`_CameraOpaqueTexture` 仅兼容回退）
+    - 反射改为直接采样外部输入的 `Reflection RT`，并按波浪法线进行 UV 扭曲
     - **基于 Voronoi + 噪波的参数化焦散模拟（不使用 LUT，深水区域保留弱焦散）**
     - 可选低质量关键字 `WATER_LOW_QUALITY`
-    - 可选回退关键字 `WATER_REFLECT_OPAQUE_FALLBACK`（仅在 Sorting Layer Texture 不可用时使用）
 - `Shaders/Water/WaterSimulation.compute`
   - 轻量 2D 波方程传播 Compute Shader。
   - 包含：
@@ -32,7 +30,7 @@
    - `_WaterBoundsMin`
    - `_WaterBoundsMax`
 3. 使用 `_DepthEdgeFadeWorld`（世界单位，例如 `0.8`）统一控制左右/上边界浅水过渡距离。
-4. 在 URP 2D Renderer 中开启 **Camera Sorting Layer Texture**，以提供 2D 反射采样源。
+4. 由相机输出一张 RT，并将其作为材质 `_ReflectionRT` 输入（Shader 不负责相机引用与位置校正）。
 5. 将 tilemap 占用区域烘焙到 `_WaterMaskRT`，作为 Compute 的水域约束。
 6. 每帧执行 `CSWavePropagate`，把 `_WaveHeightRT` 绑定到 `WaterSurface.shader` 的 `_WaveRT`。
 7. 交互时（点击、落物、角色入水）执行 `CSAddImpulse` 注入扰动。
@@ -41,11 +39,9 @@
    - 绑定 `ComputeShader` 与水面 `Renderer`
    - 勾选 `Preview In Edit Mode`
 9. 按平台调节：
-   - 降低 `_SSRSteps`
-   - 增大 `_SSRStepSize`
    - 降低波场 RT 分辨率
    - 启用 `WATER_LOW_QUALITY`
-   - 调整 `_ReflectionDistort` 与 `_ReflectionEdgeFade` 平衡表现/稳定性
+   - 调整 `_ReflectionDistort` 与 `_ReflectionStrength` 平衡表现/稳定性
 
 ## 说明
 
