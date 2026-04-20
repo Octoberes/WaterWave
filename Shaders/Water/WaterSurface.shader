@@ -8,6 +8,14 @@ Shader "WaterWave/URP2D/WaterSurface"
         _ShallowColor ("Shallow Color", Color) = (0.18, 0.63, 0.7, 0.85)
         // 波峰泡沫颜色。
         _FoamColor ("Foam Color", Color) = (0.87, 0.97, 1, 1)
+        // 边缘泡沫：控制显示范围、软过渡、总量与 Voronoi 细节密度。
+        _EdgeFoamRange ("Edge Foam Range", Range(0.001, 0.5)) = 0.1
+        _EdgeFoamSoftness ("Edge Foam Softness", Range(0.001, 0.4)) = 0.08
+        _EdgeFoamAmount ("Edge Foam Amount", Range(0, 2)) = 1.0
+        _EdgeFoamVoronoiScale ("Edge Foam Voronoi Scale", Range(1, 64)) = 20
+        _EdgeFoamVoronoiThreshold ("Edge Foam Voronoi Threshold", Range(0, 1)) = 0.52
+        _EdgeFoamWaveInfluence ("Edge Foam Wave Influence", Range(0, 2)) = 1.0
+        _EdgeFoamSpeed ("Edge Foam Speed", Range(0, 4)) = 0.65
 
         // Tilemap/世界空间边界：用于将世界坐标映射到水面UV。
         _WaterBoundsMin ("Water Bounds Min", Vector) = (0,0,0,0)
@@ -87,6 +95,13 @@ Shader "WaterWave/URP2D/WaterSurface"
                 float _WaveFrequency;
                 float _WaveSpeed;
                 float _NormalStrength;
+                float _EdgeFoamRange;
+                float _EdgeFoamSoftness;
+                float _EdgeFoamAmount;
+                float _EdgeFoamVoronoiScale;
+                float _EdgeFoamVoronoiThreshold;
+                float _EdgeFoamWaveInfluence;
+                float _EdgeFoamSpeed;
                 float _ReflectionStrength;
                 float _ReflectionDistort;
                 float _CausticsScale;
@@ -179,6 +194,25 @@ Shader "WaterWave/URP2D/WaterSurface"
                 }
 
                 return sqrt(minDist);
+            }
+
+            // 边缘泡沫：基于边缘距离 + Voronoi 噪声，并受波高调制。
+            float CalcEdgeFoam(float2 waterUV, float wave01, float t)
+            {
+                float edgeDist = min(min(waterUV.x, waterUV.y), min(1.0 - waterUV.x, 1.0 - waterUV.y));
+                float range = max(_EdgeFoamRange, 1e-4);
+                float softness = max(_EdgeFoamSoftness, 1e-4);
+                float edgeMask = 1.0 - smoothstep(range, range + softness, edgeDist);
+
+                float2 foamUV = waterUV * _EdgeFoamVoronoiScale;
+                foamUV += float2(0.13, -0.19) * t * _EdgeFoamSpeed;
+                float d0 = Voronoi(foamUV);
+                float d1 = Voronoi(foamUV * 1.35 + 7.9);
+                float voronoiMix = saturate(1.0 - min(d0, d1));
+                float voronoiFoam = smoothstep(_EdgeFoamVoronoiThreshold, 1.0, voronoiMix);
+
+                float waveFactor = pow(saturate(wave01), 1.0 / max(_EdgeFoamWaveInfluence, 1e-4));
+                return saturate(edgeMask * voronoiFoam * waveFactor * _EdgeFoamAmount);
             }
 
             Varyings vert(Attributes input)
@@ -298,7 +332,7 @@ Shader "WaterWave/URP2D/WaterSurface"
                 half3 waterCol = lerp(_ShallowColor.rgb, _BaseColor.rgb, depthDelta);
 
                 // 反射：直接采样外部 RT，并根据波浪高度扭曲。
-                half3 reflected = SampleReflectionFromRT(screenUV, normalWS, waveRT);
+                half3 reflected = SampleReflectionFromRT(screenUV, normalWS, wave);
 
                 float reflectionMask = lerp(0.35, 1.0, saturate(1.0 - depthDelta));
                 waterCol = lerp(waterCol, reflected, _ReflectionStrength * reflectionMask);
@@ -310,7 +344,9 @@ Shader "WaterWave/URP2D/WaterSurface"
 
                 // 泡沫主要出现在浅水与高波动区域。
                 half foam = smoothstep(0.65, 0.95, saturate(proceduralWave)) * saturate(1.0 - depthDelta);
-                waterCol = lerp(waterCol, _FoamColor.rgb, foam * 0.65);
+                float edgeFoam = CalcEdgeFoam(waterUV, saturate(proceduralWave), t) * saturate(1.0 - depthDelta * 0.45);
+                float foamMix = saturate(foam * 0.65 + edgeFoam);
+                waterCol = lerp(waterCol, _FoamColor.rgb, foamMix);
 
                 half alpha = _BaseColor.a * boundsMask;
                 return half4(waterCol, alpha);
